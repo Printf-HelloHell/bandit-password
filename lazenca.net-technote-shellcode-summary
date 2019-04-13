@@ -1,0 +1,145 @@
+	<shell code> : 실행중인 프로그램에 삽입된 코드 (machine code로 작성됨)
+ 
+ - 어셈블리어로 작성 -> 기계어로 변환
+ - 실제로 실행가능한 프로그램은 아님 -> 메모리상 배치나 메모리 세그먼트 등을 신경쓰지 않아도 됨
+
+*기본 바탕 이론*
+
+ - c언어 -->(컴파일)--> Assembly -->	Machine code
+ - shell code는 assembly, machine code와 같은 저수준의 언어로 개발된 코드를 필요로 함.
+
+ -기본이 되는 assembly 명령어들-
+
+mov destination, source : 목표 피연산자에 소스 피연산자를 복사합니다.
+PUSH value : stack에 Value 값을 저장합니다.
+POP register : stack 상위의 값을 레지스터에 저장합니다.
+  + stack은 후입선출의 구조로 한방향으로 데이터가 쌓이며, 데이터가 들어가는 push가 일어날 경우 4비트가 감소하고 데이터가 나오는 pop이 일어날 경우 4비트가 증가한다.  
+CALL function_name(address) : 리턴을 위해 CALL 명령어의 다음 명령주소를 스택에 저장한 후 함수의 위치로 점프를 합니다.
+ret : 스택으로 부터 리턴 주소를 팝하고 그 곳으로 점프하여 함수에서 리턴 합니다.
+inc destination : 목표 피연산자를 1증가 시킵니다.
+dec destination : 목표 피연산자를 1 감소 시킵니다.
+add destination, value : 목표 피연산자에 value 값을 더합니다.
+sub destination, value : 목표 피연산자에 value 값을 뺍니다.
+or destination, value : 비트 or 논리 연산을 한다. 최종 결과는 목표 피연산자에 저장됩니다.
+and destination, value : 비트 and 논리 연산을 한다. 최종 결과는 목표 피연산자에 저장됩니다.
+xor destination, value : 비트 xor 논리 연산을 한다. 최종 결과는 목표 피연산자에 저장됩니다.
+lea destination, source : 목표 피연산자에 소스 피연산자의 유효 주소를 로드합니다.
+  + mov와 lea의 차이점?
+    - mov : 좌변에 우변 값 입력
+    - lea : 좌변(레지스터만 가능)에 우변의 주소값 입력
+    ex) 0x125e4500 메모리 주소 4바이트 공간에 77이 들어있음
+        -> mov는 77을 저장하고, lea는 0x125e4500를 저장함
+
+int 0x80 : EAX(32bit 환경)에 저장된 시스템 함수 호출
+syscall : RAX(62bit 환경)에 저장된 시스템 함수 호출
+
+C언어 : 표준 라이브러리가 제공되어 여러 시스템에서 컴파일이 가능 <--> Assembly : 특정 프로세서 아키텍처용이라고 정해져 있고 호환성 있는 표준 라이브러리가 없음. 커널 시스템 콜(운영체제, 프로세서의 아키텍처마다 정보가 다름) 직접 호출 가능
+    
+--- shell code 작성 ---
+
+
+section .data                               ; 데이터 세그먼트
+    msg db      "hello, world!",0x0a, 0x0d  ; 문자열과 새 줄 문자, 개행 문자 바이트
+ 
+section .text                               ; 텍스트 세그먼트
+    global _start                           ; ELF 링킹을 위한 초기 엔트리 포인트
+ 
+_start:
+    ; SYSCALL: write(1,msg,14)
+    mov     rax, 1      ; 쓰기 시스템 콜의 번호 '1' 를 rax 에 저장합니다.
+    mov     rdi, 1      ; 표준 출력를 나타내는 번호 '1'을 rdi에 저장합니다.
+    mov     rsi, msg    ; 문자열 주소를 rsi에 저장니다.
+    mov     rdx, 14     ; 문자열의 길이 '14'를 rdx에 저장합니다.
+    syscall             ; 시스템 콜을 합니다.
+ 
+    ; SYSCALL: exit(0)
+    mov    rax, 60      ; exit 시스템 콜의 번호 '60'을 eax 에 저장합니다.
+    mov    rdi, 0       ; 정상 종료를 의미하는 '0'을 ebx에 저장 합니다.
+    syscall             ; 시스템 콜을 합니다.
+
+위 프로그램은 혼자서 동작되지 않으며 링킹 과정도 필요치 않아 shell code가 아닙니다
+앞의 코드를 독자적으로 동작 가능하게 하려면...
+ 1) 텍스트, 데이터 세그먼트를 사용하지 않습니다. --> write 시스템 함수에 출력할 메세지를 저장한 주소를 mov 명령어를 이용해 전달할 수 없음
+   --> call 명령어 뒤에 출력할 메세지를 저장하여 pop명령어로 ecx 레지스터에 주소값을 전달함으로서 해결 가능
+ 2) 함수의 호출은 call 명령어를 사용하여 "helloworld" 함수를 호출합니다.
+ 3) Write 시스템 함수에 의해 출력 될 문자열은 해당 명령어 뒤에 작성합니다.
+
+메모리 세그먼트를 사용하지 않고 완전히 위치 독립적인 방법으로 다음과 같이 코드를 짤 수 있다.
+
+BITS 32                         ; nasm에게 32비트 코드임을 알린다
+  
+call helloworld                 ; 아래 mark_below의 명령을 call한다.
+db "Hello, world!", 0x0a, 0x0d  ; 새 줄 바이트와 개행 문자 바이트
+  
+helloworld:
+    ; ssize_t write(int fd, const void *buf, size_t count);
+    pop ecx         ; 리턴 주소를 팝해서 exc에 저장합니다.
+    mov eax, 4      ; 시스템 콜 번호를 씁니다.
+    mov ebx, 1      ; STDOUT 파일 서술자
+    mov edx, 15     ; 문자열 길이
+    int 0x80        ; 시스템 콜: write(1,string, 14)
+  
+    ; void _exit(int status);
+    mov eax,1       ;exit 시스템 콜 번호
+    mov ebx,0       ;Status = 0
+    int 0x80        ;시스템 콜: exit(0)
+
+--- build & disassemble ---
+lazenca0x0@ubuntu:~/ASM$ nasm ASM32.s
+lazenca0x0@ubuntu:~/ASM$ ndisasm -b32 ASM32
+00000000  E80F000000        call dword 0x14
+00000005  48                dec eax
+00000006  656C              gs insb
+00000008  6C                insb
+00000009  6F                outsd
+0000000A  2C20              sub al,0x20
+0000000C  776F              ja 0x7d
+0000000E  726C              jc 0x7c
+00000010  64210A            and [fs:edx],ecx
+00000013  0D59B80400        or eax,0x4b859
+00000018  0000              add [eax],al
+0000001A  BB01000000        mov ebx,0x1
+0000001F  BA0F000000        mov edx,0xf
+00000024  CD80              int 0x80
+00000026  B801000000        mov eax,0x1
+0000002B  BB00000000        mov ebx,0x0
+00000030  CD80              int 0x80
+lazenca0x0@ubuntu:~/ASM$ hexdump -C ASM32
+00000000  e8 0f 00 00 00 48 65 6c  6c 6f 2c 20 77 6f 72 6c  |.....Hello, worl|
+00000010  64 21 0a 0d 59 b8 04 00  00 00 bb 01 00 00 00 ba  |d!..Y...........|
+00000020  0f 00 00 00 cd 80 b8 01  00 00 00 bb 00 00 00 00  |................|
+00000030  cd 80                                             |..|
+00000032
+lazenca0x0@ubuntu:~/ASM$
+
+생성된 shellcode를 테스트하기 위해 python을 이용해 변환한 다음 다음과 같은 코드로 테스트할 수 있다
+
+#include<stdio.h>
+#include<string.h>
+ 
+unsigned char shellcode [] = "\xe8\x0f\x00\x00\x00Hello, world!\n\rY\xb8\x04\x00\x00\x00\xbb\x01\x00\x00\x00\xba\x0f\x00\x00\x00\xcd\x80\xb8\x01\x00\x00\x00\xbb\x00\x00\x00\x00\xcd\x80";
+unsigned char code[];
+ 
+void main(){
+    int len = strlen(shellcode);
+    printf("Shellcode len : %d\n",len);
+    strcpy(code,shellcode);
+    (*(void(*)()) code)();
+
+빌드 후 실행하면 에러가 발생한다. 문자열을 다루는 함수가 shellcode에 포함되어 있는 null byte(0x00)를 문자열의 끝이라고 인식하기 때문.
+shellcode의 내용이 code에 복사되지 않아 발생한 문제이므로 shellcode속의 null byte를 제거해야함.
+
+에러 포인트를 알려주는 코드들을 통해 제거해야 할 null byte를 알 수 있음.
+0xE80F000000 : call dword 0x14
+  - call 명령어의 피연산자에서 사용 가능한 값의 크기는 32bits인데 '0x14'같이 작은 값이 사용될 경우 남는 부분에 null byte가 포함됨
+    --> jmp 명령어를 통해 last 함수로 건너뛰고 last 함수에서 helloworld 함수를 호출한다.
+        --- null byte가 제거된 이유는 음수 때문 : jump short 명령어로 0x20 byte로 이동 후 helloworld 함수 호출을 위해 -0x22로 이동하게 됨.
+            --> -0x22를 표현하기 위해 2의 보수를 사용하게 되고, null byte가 제거된다.
+0xB804000000 : mov eax, 4 
+0xBB01000000 : mov ebx, 1
+0xBA0F000000 : mov edx, 15
+0xB801000000 : mov eax,1
+0xBB00000000 : mov ebx,0
+  - 64 bit, 32bit, 16 bit 레지스터에 표현 가능한 값보다 작은 값을 저장하게 되면 나머지 공간은 null byte로 채워지게 됨.
+  - shellcode는 shellcode가 실행되기 이전의 레지스터 값들을 그대로 사용하므로 사용 전에 레지스터의 모든 영역을 0으로 변경하는게 좋음.
+    --> sub 명령어로 자기 자신의 레지스터 값을 빼거나 xor 명령어를 수행   
